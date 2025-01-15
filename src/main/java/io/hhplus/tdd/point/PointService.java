@@ -53,12 +53,12 @@ public class PointService {
      */
     public UserPoint use(long id, long amount) {
         UserPoint userPoint = userPointTable.selectById(id);
-        userPointTable.insertOrUpdate(id, userPoint.point() - amount);
+        UserPoint updatedUserPoint = userPointTable.insertOrUpdate(id, userPoint.point() - amount);
         pointHistoryTable.insert(id, amount, TransactionType.USE, System.currentTimeMillis());
 
         log.info("{}유저가 {}포인트를 사용합니다.", id, amount);
 
-        return userPoint;
+        return updatedUserPoint;
     }
 
     /**
