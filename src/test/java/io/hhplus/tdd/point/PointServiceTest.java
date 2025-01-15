@@ -107,8 +107,8 @@ class PointServiceTest {
             // given
             long userId = 1L;
             List<PointHistory> mockHistories = List.of(
-                new PointHistory(1L, userId, 10_000L, TransactionType.CHARGE, 1_000_000L),
-                new PointHistory(2L, userId, 5_000L, TransactionType.USE, 1_000_500L)
+                new PointHistory(1L, userId, 10000L, TransactionType.CHARGE, 1000000L),
+                new PointHistory(2L, userId, 5000L, TransactionType.USE, 1000500L)
             );
             when(pointHistoryTable.selectAllByUserId(userId)).thenReturn(mockHistories);
 
@@ -117,8 +117,8 @@ class PointServiceTest {
 
             // then
             assertThat(histories).hasSize(2);
-            assertThat(histories.get(0).amount()).isEqualTo(10_000L);
-            assertThat(histories.get(1).amount()).isEqualTo(5_000L);
+            assertThat(histories.get(0).amount()).isEqualTo(10000L);
+            assertThat(histories.get(1).amount()).isEqualTo(5000L);
             verify(pointHistoryTable).selectAllByUserId(userId);
         }
     }
