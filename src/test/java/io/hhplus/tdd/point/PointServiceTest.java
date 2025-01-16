@@ -12,6 +12,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -197,6 +200,89 @@ class PointServiceTest {
             assertThat(histories.get(0).amount()).isEqualTo(10_000L);
             assertThat(histories.get(1).amount()).isEqualTo(5_000L);
             verify(pointHistoryTable).selectAllByUserId(userId);
+        }
+    }
+
+    @Nested
+    @DisplayName("동시성 테스트")
+    class concurrency {
+
+        @Test
+        @DisplayName("동시 충전 테스트")
+        void 동시_충전_테스트() throws InterruptedException {
+            // given
+            long userId = 1L;
+            long balance = 0L;
+            long amount = 1_000L;
+            int threadCount = 100;
+            UserPoint initialUserPoint = new UserPoint(userId, balance, System.currentTimeMillis());
+
+            when(userPointTable.selectById(userId)).thenReturn(initialUserPoint);
+            when(userPointTable.insertOrUpdate(eq(userId), anyLong()))
+                .thenAnswer(invocation -> {
+                    long newBalance = invocation.getArgument(1);
+                    return new UserPoint(userId, newBalance, System.currentTimeMillis());
+                });
+
+            // 동시 요청 실행
+            ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch latch = new CountDownLatch(threadCount);
+
+            for (int i = 0; i < threadCount; i++) {
+                executorService.submit(() -> {
+                    try {
+                        pointService.charge(userId, amount);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            latch.await();
+            executorService.shutdown();
+
+            // then
+            verify(userPointTable, times(threadCount)).insertOrUpdate(eq(userId), anyLong());
+            verify(pointHistoryTable, times(threadCount)).insert(eq(userId), eq(amount), eq(TransactionType.CHARGE), anyLong());
+        }
+
+        @Test
+        @DisplayName("동시 사용 테스트")
+        void 동시_사용_테스트() throws InterruptedException {
+            // given
+            long userId = 1L;
+            long balance = 100_000L;
+            long amount = 1_000L;
+            int threadCount = 50;
+            UserPoint initialUserPoint = new UserPoint(userId, balance, System.currentTimeMillis());
+
+            when(userPointTable.selectById(userId)).thenReturn(initialUserPoint);
+            when(userPointTable.insertOrUpdate(eq(userId), anyLong()))
+                .thenAnswer(invocation -> {
+                    long newBalance = invocation.getArgument(1);
+                    return new UserPoint(userId, newBalance, System.currentTimeMillis());
+                });
+
+            // 동시 요청 실행
+            ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch latch = new CountDownLatch(threadCount);
+
+            for (int i = 0; i < threadCount; i++) {
+                executorService.submit(() -> {
+                    try {
+                        pointService.use(userId, amount);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            latch.await();
+            executorService.shutdown();
+
+            // then
+            verify(userPointTable, times(threadCount)).insertOrUpdate(eq(userId), anyLong());
+            verify(pointHistoryTable, times(threadCount)).insert(eq(userId), eq(amount), eq(TransactionType.USE), anyLong());
         }
     }
 }
