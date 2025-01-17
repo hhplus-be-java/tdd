@@ -14,6 +14,8 @@ public class PointService {
     private final UserPointTable userPointTable;
     private final PointHistoryTable pointHistoryTable;
 
+    private final Object lock = new Object();
+
     public PointService(UserPointTable userPointTable, PointHistoryTable pointHistoryTable) {
         this.userPointTable = userPointTable;
         this.pointHistoryTable = pointHistoryTable;
@@ -26,12 +28,26 @@ public class PointService {
      * @param amount (충전하는 포인트 금액)
      */
     public UserPoint charge(long id, long amount) {
-        UserPoint userPoint = userPointTable.insertOrUpdate(id, amount);
-        pointHistoryTable.insert(id, amount, TransactionType.CHARGE, System.currentTimeMillis());
 
-        log.info("{}유저가 {}포인트를 충전하였습니다.", id, amount);
+        final long MAX_BALANCE = 5_000_000;
 
-        return userPoint;
+        synchronized (lock) {
+            UserPoint userPoint = userPointTable.selectById(id);
+            long balance = userPoint.point() + amount;
+
+            if (balance > MAX_BALANCE) {
+                log.error("잔고는 최대 {}을 초과할 수 없습니다. 현재 잔액은 {}입니다.", MAX_BALANCE, balance);
+
+                throw new IllegalArgumentException("잔고는 최대 " + MAX_BALANCE + "을 초과할 수 없습니다.");
+            }
+
+            userPoint = userPointTable.insertOrUpdate(id, balance);
+            pointHistoryTable.insert(id, amount, TransactionType.CHARGE, System.currentTimeMillis());
+
+            log.info("{}유저가 {}포인트를 충전하였습니다.", id, amount);
+
+            return userPoint;
+        }
     }
 
     /**
@@ -52,13 +68,31 @@ public class PointService {
      * @param amount (사용하는 포인트 금액)
      */
     public UserPoint use(long id, long amount) {
-        UserPoint userPoint = userPointTable.selectById(id);
-        UserPoint updatedUserPoint = userPointTable.insertOrUpdate(id, userPoint.point() - amount);
-        pointHistoryTable.insert(id, amount, TransactionType.USE, System.currentTimeMillis());
+        final long MIN_USE_AMOUNT = 1_000;
 
-        log.info("{}유저가 {}포인트를 사용합니다.", id, amount);
+        synchronized (lock) {
+            UserPoint userPoint = userPointTable.selectById(id);
 
-        return updatedUserPoint;
+            if (amount < MIN_USE_AMOUNT) {
+                log.error("포인트는 최소 {} 이상 사용해야 합니다.", MIN_USE_AMOUNT);
+
+                throw new IllegalArgumentException("포인트는 최소 " + MIN_USE_AMOUNT + " 이상 사용해야 합니다.");
+            }
+
+            if (userPoint.point() < amount) {
+                log.error("잔고가 부족합니다. 현재 잔고는 {} 입니다.", userPoint.point());
+
+                throw new IllegalArgumentException("잔고가 부족합니다. 현재 잔고는 " + userPoint.point() + "입니다.");
+            }
+
+            UserPoint updatedUserPoint = userPointTable.insertOrUpdate(id, userPoint.point() - amount);
+            pointHistoryTable.insert(id, amount, TransactionType.USE, System.currentTimeMillis());
+
+            log.info("{}유저가 {}포인트를 사용합니다.", id, amount);
+
+            return updatedUserPoint;
+        }
+
     }
 
     /**
