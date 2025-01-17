@@ -3,52 +3,43 @@
 ## 동시성 제어 방식
 
 ### 1. `synchronized` 블록 활용
-`PointService`에서는 사용자별로 동시성을 제어하기 위해 `synchronized` 블록을 사용합니다. 해당 블록은 특정 사용자의 `id`를 키로 사용하여 동시성 문제를 예방합니다.
+`PointService`에서는 사용자별로 동시성을 제어하기 위해 고정된 `lock` 객체와 `synchronized` 블록을 사용합니다. 
+이 방식은 단일 객체를 기준으로 동시성을 제어하여 특정 시점에서 하나의 스레드만 코드 블록에 접근할 수 있도록 보장합니다.
 
 #### 코드 스니펫
 ```java
-synchronized (getLock(id)) {
-    // 충전 또는 사용 로직
+synchronized (lock) {
+UserPoint userPoint = userPointTable.selectById(id);
+long balance = userPoint.point() + amount;
+
+    if (balance > MAX_BALANCE) {
+        throw new IllegalArgumentException("잔고는 최대 " + MAX_BALANCE + "을 초과할 수 없습니다.");
+    }
+
+userPoint = userPointTable.insertOrUpdate(id, balance);
+    pointHistoryTable.insert(id, amount, TransactionType.CHARGE, System.currentTimeMillis());
+
+        return userPoint;
 }
 ```
 
-### 2. `ConcurrentHashMap` 기반 동적 Lock 관리
-- 동적 Lock 관리를 위해 `ConcurrentHashMap`을 사용하여 사용자 ID마다 별도의 Lock 객체를 생성 및 관리합니다.
-- 기존의 정적 Lock 관리 방식보다 메모리 효율적이고, 유연한 동시성 제어가 가능합니다.
+#### 2. 동시성 제어 동작 방식
+- `lock` 객체를 기준으로 모든 충전 및 사용 요청이 순차적으로 처리됩니다.
+- 동일한 `lock` 객체를 사용하므로, 하나의 요청이 처리되는 동안 다른 요청은 대기하게 됩니다.
 
-#### 코드 동작 방식
-1. `getLock` 메서드를 호출하여 사용자 ID별로 Lock 객체를 가져옴.
-2. `ConcurrentHashMap.computeIfAbsent`를 활용하여 Lock 객체를 동적으로 생성.
-
-#### 코드 스니펫
-```java
-private final ConcurrentHashMap<Long, Object> lockMap = new ConcurrentHashMap<>();
-
-private Object getLock(Long id) {
-    return lockMap.computeIfAbsent(id, key -> new Object());
-}
-```
-
-### 3. Lock 객체 정리
-- 사용자가 더 이상 Lock 객체를 필요로 하지 않을 경우, `lockMap`에서 해당 Lock 객체를 제거하여 메모리 낭비를 방지합니다.
-
-#### 코드 스니펫
-```java
-lockMap.remove(id);
-```
 
 ---
 
 ## 동시성 제어 장점
-1. **사용자별 동시성 제어**:
-    - 특정 사용자 ID에 대한 요청만 동기화되므로, 다른 사용자 요청은 병렬로 처리 가능
-    - 시스템의 처리량(Throughput)을 유지하며 데이터 무결성을 보장
+1. **간단한 구현**:
+    - 고정된 `lock` 객체를 사용하여 간단한 방식으로 동시성을 제어합니다.
+    - 코드가 직관적이고 유지보수가 용이합니다.
 
-2. **메모리 효율성**:
-    - `ConcurrentHashMap`을 사용해 Lock 객체를 동적으로 생성하고 필요 시 제거함으로써 메모리 사용을 최소화
+2. **데이터 무결성 보장**:
+    - `synchronized` 블록을 통해 동시에 실행되는 요청이 데이터에 손상을 입히지 않도록 보장합니다.
 
-3. **유연한 확장성**:
-    - 다수의 사용자 요청을 효율적으로 처리할 수 있도록 설계
+3. **성능의 수용 가능성**:
+    - 단일 사용자에 대해 동시 요청이 적은 경우 충분히 효율적입니다.
 
 ---
 
@@ -93,19 +84,19 @@ void 동시_충전과_사용_테스트() throws InterruptedException {
 
 ## 문제점 및 개선 방안
 ### 문제점
-1. **Lock 객체 관리 오버헤드**:
-    - 동적 Lock 객체를 관리하면서 `ConcurrentHashMap`에서 Lock을 생성하거나 제거하는 데 부하가 발생할 가능성
-2. **Lock 객체 누수 가능성**:
-    - Lock 객체 제거 로직이 누락되거나 제대로 작동하지 않으면 메모리 누수가 발생할 가능성
+1. **전체 동시성 차단**:
+    - 단일 `lock` 객체를 사용하므로, 모든 사용자 요청이 하나의 동기화 블록에서 처리됩니다.
+    - 여러 사용자의 요청이 들어와도 병렬로 처리되지 않고 순차적으로 처리되므로 성능 저하 가능성이 있습니다.
+2. **확장성 부족**:
+    - 사용자 수가 많아지거나 동시 요청이 증가할 경우 처리 속도가 느려질 수 있습니다.
 
 ### 개선 방안
-1. **Lock 객체 만료 정책 추가**:
-    - 일정 시간 동안 사용되지 않은 Lock 객체를 자동으로 제거하는 기능을 추가
-    - 예: `ScheduledExecutorService`를 활용해 주기적으로 정리
+1. **사용자별 Lock 적용**:
+    - 사용자별 Lock을 관리하여 각 사용자에 대해 독립적으로 동기화를 적용합니다.
+    - 이를 통해 다중 사용자 요청이 병렬로 처리될 수 있도록 개선할 수 있습니다.
 
-2. **다른 동시성 제어 기술 적용**:
-    - `StampedLock`이나 `ReadWriteLock`을 사용하여 읽기와 쓰기 작업의 성능을 최적화
-    - 데이터베이스의 트랜잭션 락 활용으로 애플리케이션 레벨 락을 줄임.
+2. **데이터베이스 트랜잭션 활용**:
+    - 동시성 문제를 애플리케이션 레벨에서 제어하지 않고 데이터베이스 트랜잭션과 Lock을 활용하여 처리합니다.
 
 ---
 
@@ -119,6 +110,6 @@ void 동시_충전과_사용_테스트() throws InterruptedException {
 
 
 ## 결론
-`PointService`는 사용자별 동시성을 효과적으로 제어하기 위해 `synchronized` 블록과 `ConcurrentHashMap` 기반의 동적 Lock 관리를 활용하였습니다.
-이 방식은 높은 처리량을 유지하면서도 데이터의 무결성과 일관성을 보장합니다.
-추가적으로 Lock 객체의 효율적인 관리 및 테스트를 통해 운영 환경에서도 안정적으로 동작하도록 개선할 여지가 있습니다.
+`PointService`는 `synchronized` 블록을 사용하여 동시성을 간단하게 제어하면서 데이터 무결성과 일관성을 보장합니다.
+그러나 단일 `lock` 객체를 사용하는 방식은 전체 처리량에 제약을 가져올 수 있습니다.
+사용자별 Lock 관리와 같은 개선 방안을 도입하면 성능과 확장성을 향상시킬 수 있습니다.
